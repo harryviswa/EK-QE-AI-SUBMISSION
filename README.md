@@ -169,6 +169,7 @@ EK-QE-AI-SUBMISSION/
 **Optional:**
 - **Azure OpenAI** account — For cloud-based embeddings and LLM
 
+##VIDEO DEMO: https://drive.google.com/file/d/1EPCxiE8JWCJrXFZtWOIR-oXHqMdH2Gq5/view?usp=sharing
 
 ### Option 1: Local Development (Advanced)
 
