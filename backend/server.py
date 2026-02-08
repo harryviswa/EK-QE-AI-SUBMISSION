@@ -64,8 +64,8 @@ def allowed_file(filename):
 def get_user_id():
     """Extract or create user ID from request."""
     user_id = "harry"#request.headers.get("X-User-ID")
-    if not user_id:
-        user_id = str(uuid.uuid4())
+    # if not user_id:
+    #     user_id = str(uuid.uuid4())
     return user_id
 
 
@@ -408,15 +408,21 @@ def rag_query():
         context_results = query_collection(query_text, user_id, n_results=top_k)
 
         if not context_results:
-            return jsonify({"warning": "No relevant context found"}), 200
+            # Even if no context is found, we can still call the LLM to get a response based on the query alone
+           # return jsonify({"warning": "No relevant context found"}), 200
+            print(f"No context found for query: {query_text}")
+            context_results = query_collection("about", user_id, n_results=top_k)
 
-        context_docs = [result["content"] for result in context_results]
+        context_docs = []
+        if context_results:
+            context_docs = [result["content"] for result in context_results]
 
+        context = "\n\n".join(context_docs[:3]) if context_docs else ""
         # Re-rank if enabled
         if use_reranking and len(context_docs) > 1:
             context_docs = re_rank_cross_encoders(query_text, context_docs)
 
-        context = "\n\n".join(context_docs[:3])  # Use top 3 re-ranked docs
+            context = "\n\n".join(context_docs[:3])  # Use top 3 re-ranked docs
 
         # List of available actions for AI agent to decide
         prompt_templates = [

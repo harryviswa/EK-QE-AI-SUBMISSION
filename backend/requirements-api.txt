@@ -16,3 +16,4 @@ langchain-core==0.3.29
 langchain-text-splitters==0.3.4
 unstructured==0.10.30
 openpyxl==3.1.2
+sentence-transformers==2.3.0

@@ -55,6 +55,14 @@ class OllamaEmbeddingFunction:
             # Return zero vectors as fallback
             return [[0.0] * 384 for _ in input]
 
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Compatibility method for libraries expecting embed_documents."""
+        return self(texts)
+
+    def embed_query(self, text: str) -> List[float]:
+        """Compatibility method for libraries expecting embed_query."""
+        return self([text])[0]
+
 
 def process_document(uploaded_file):
     """Process uploaded file and return document chunks."""
@@ -228,6 +236,21 @@ def query_collection(prompt, user_id, n_results=10):
                 "metadata": results["metadatas"][0][i] if results["metadatas"] else {},
                 "distance": results["distances"][0][i] if results["distances"] else 0,
             })
+    else:
+        # Add first 5 documents if no results found
+        collection = get_vector_collection()
+        all_results = collection.get(
+            where={"user_id": user_id},
+            limit=5,
+            include=["documents", "metadatas", "distances"]
+        )
+        if all_results["documents"]:
+            for i, doc in enumerate(all_results["documents"]):
+                formatted_results.append({
+                    "content": doc,
+                    "metadata": all_results["metadatas"][i] if all_results["metadatas"] else {},
+                    "distance": all_results["distances"][i] if all_results["distances"] else 0,
+                })
     
     return formatted_results
 
@@ -286,14 +309,17 @@ def call_llm(context="", sysprompt="", prompt="", spl_prompt="", mode="offline",
     if mode == "offline":
         # Use Ollama for offline mode
         try:
+            user_message = (
+                f"Context:\n{context}\n\n"
+                f"Question:\n{prompt}\n\n"
+                f"Requirements:\n{spl_prompt}\n\n"
+                "Now provide your response:"
+            )
             response = ollama.chat(
                 model=active_model,
-                messages = [
-                {"role": "system", "content": sysprompt},
-                {"role": "user", "content": f"## Context\n{context}"},
-                {"role": "user", "content": f"## Question\n{prompt}"},
-                {"role": "user", "content": f"## Requirements\n{spl_prompt}"},
-                {"role": "assistant", "content": "Now provide your response:"}
+                messages=[
+                    {"role": "system", "content": sysprompt},
+                    {"role": "user", "content": user_message},
                 ],
                 stream=False,
             )
@@ -303,6 +329,9 @@ def call_llm(context="", sysprompt="", prompt="", spl_prompt="", mode="offline",
                 # If the response contains our markers, extract just the answer part
                 if "Now provide your response:" in result:
                     result = result.split("Now provide your response:", 1)[1].strip()
+            result = result.strip() if isinstance(result, str) else result
+            if not result:
+                return "No response generated. Please try again or provide more context."
             return result
         except Exception as e:
             raise Exception(f"Ollama LLM call failed: {str(e)}")
@@ -354,16 +383,26 @@ def re_rank_cross_encoders(query, documents):
         return []
     
     # Lazy import to avoid torch initialization on startup
-    from sentence_transformers import CrossEncoder
-    
-    encoder_model = CrossEncoder(cross_encoder_model[0], trust_remote_code=True)
-    ranks = encoder_model.rank(query, documents, top_k=min(3, len(documents)))
-    
-    ranked_docs = []
-    for rank in ranks:
-        ranked_docs.append(documents[rank["corpus_id"]])
-    
-    return ranked_docs
+    try:
+        from sentence_transformers import CrossEncoder
+    except Exception as e:
+        print(f"[WARN] Cross-encoder unavailable: {str(e)}")
+        print("       Skipping re-ranking and returning original documents")
+        return documents
+
+    try:
+        encoder_model = CrossEncoder(cross_encoder_model[0], trust_remote_code=True)
+        ranks = encoder_model.rank(query, documents, top_k=min(3, len(documents)))
+
+        ranked_docs = []
+        for rank in ranks:
+            ranked_docs.append(documents[rank["corpus_id"]])
+
+        return ranked_docs
+    except Exception as e:
+        print(f"[WARN] Cross-encoder re-ranking failed: {str(e)}")
+        print("       Falling back to original documents")
+        return documents
 
 
 def list_vector_sources(user_id):
