@@ -1,0 +1,125 @@
+services:
+  # Backend Flask API - Production optimized
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nexqa-backend-prod
+    restart: always
+    environment:
+      - FLASK_ENV=production
+      - FLASK_DEBUG=False
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-azure}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text:latest}
+      - CHROMA_DB_PATH=/data/chroma_db
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}
+      - AZURE_EMBEDDING_MODEL=${AZURE_EMBEDDING_MODEL:-text-embedding-ada-002}
+      - AZURE_OPENAI_MODEL=${AZURE_OPENAI_MODEL:-gpt-4}
+    volumes:
+      - chroma_data_prod:/data/chroma_db
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - nexqa-network-prod
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # Frontend React App - Production optimized
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=http://localhost:5000/api
+    container_name: nexqa-frontend-prod
+    restart: always
+    environment:
+      - VITE_API_URL=http://localhost:5000/api
+    depends_on:
+      - backend
+    networks:
+      - nexqa-network-prod
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Ollama LLM Service - Production optimized
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nexqa-ollama-prod
+    restart: always
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+    volumes:
+      - ollama_data_prod:/root/.ollama
+    networks:
+      - nexqa-network-prod
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+# Named volumes for data persistence
+volumes:
+  chroma_data_prod:
+    driver: local
+  ollama_data_prod:
+    driver: local
+
+# Network for service communication
+networks:
+  nexqa-network-prod:
+    driver: bridge
