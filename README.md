@@ -9,6 +9,23 @@
 
 **NexQA.ai** is a modern, privacy-first Retrieval-Augmented Generation (RAG) application tailored for Quality Engineers (QEs). It features a **React frontend with glassmorphism design** paired with a **Flask backend API**. Empowering QE teams with AI-assisted test case generation, validation, API automation, and knowledge management.
 
+## 🎯 Assessment Alignment: Lead Quality Assurance Engineer (AI)
+
+This repository doubles as the working submission for the **Lead Quality Assurance Engineer (AI) — Future of Quality Engineering Assessment**. The challenge demands a concrete, executable solution that reimagines how software quality is achieved using AI, automation, and modern engineering practices. Here’s how NexQA.ai satisfies every requirement:
+
+| Assessment Expectation | How NexQA.ai Delivers |
+| --- | --- |
+| **Functional Solution** | End-to-end RAG platform with React + Flask + ChromaDB, fully runnable via Docker Compose or local setup. - Currently local setup should be working |
+| **AI-First Quality Engineering** | Integrates Ollama or Azure OpenAI for LLM reasoning, AI-driven test generation, validation, risk analysis, and automation script authoring. - Azure OpenAI is an addition and can be extended for later integration |
+| **Performance & Scalability** | Uses persistent ChromaDB, efficient chunking, cosine similarity search, and cross-encoder re-ranking for high-quality retrieval at scale. |
+| **Data & Storage Strategy** | Supports PDF/TXT/XLS/XLSX uploads, persistent vector stores, caching-friendly APIs, and URL ingestion with structured chunk metadata. |
+| **RAG Considerations** | Handles context selection, chunk overlap, embedding provider switching, latency logging, and traceable source attribution. |
+| **Modern UX** | Glassmorphism UI, contextual help on first load, Excel export for tables, and responsive layout tailored for enterprise teams. |
+| **Deliverables** | Working codebase (this repo), comprehensive README (>1 page) covering problem, approach, architecture, performance, and execution steps. |
+| **Walkthrough Ready** | Detailed documentation plus logging, health checks, and observability hooks to discuss trade-offs, limitations, and next steps during interviews. |
+
+>*Stretch Goal*: (https://drive.google.com/file/d/1EPCxiE8JWCJrXFZtWOIR-oXHqMdH2Gq5/view?usp=sharing)
+
 ### What Makes NexQA.ai Unique?
 
 - 🤖 **AI-Powered Testing** — Generate test cases, strategies, and validations using local or cloud LLMs
