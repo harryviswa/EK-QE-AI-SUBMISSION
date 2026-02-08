@@ -26,6 +26,12 @@ This repository doubles as the working submission for the **Lead Quality Assuran
 
 >*Stretch Goal*: (https://drive.google.com/file/d/1EPCxiE8JWCJrXFZtWOIR-oXHqMdH2Gq5/view?usp=sharing)
 
+<img width="1908" height="1022" alt="image" src="https://github.com/user-attachments/assets/4de39a2a-a759-4845-992a-ff3f0fdac012" />
+
+<img width="1902" height="1006" alt="image" src="https://github.com/user-attachments/assets/59f4bba1-d74c-4fb5-980c-8b7f11378992" />
+
+
+
 ### What Makes NexQA.ai Unique?
 
 - 🤖 **AI-Powered Testing** — Generate test cases, strategies, and validations using local or cloud LLMs
