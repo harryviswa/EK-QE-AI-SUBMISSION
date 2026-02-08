@@ -169,47 +169,8 @@ EK-QE-AI-SUBMISSION/
 **Optional:**
 - **Azure OpenAI** account — For cloud-based embeddings and LLM
 
-### Option 1: Docker Compose (Recommended - Works on All Systems) ⭐
 
-**Easiest way to run on Windows, Mac, or Linux - no installation needed!**
-
-```bash
-# Step 1: Navigate to project
-cd EK-QE-AI-SUBMISSION
-
-# Step 2: Create environment file
-cp .env.docker .env
-
-# Step 3: Start all services (3 seconds!)
-docker compose up -d
-
-# Step 4: Access the app
-# Frontend: http://localhost:3000
-# Backend: http://localhost:5000/api/health
-# Ollama: http://localhost:11434/api/tags
-```
-
-**What's running:**
-- ✅ Frontend (React)
-- ✅ Backend (Flask API)
-- ✅ Ollama (LLM service)
-- ✅ ChromaDB (vector database with persistent storage)
-
-**See logs:**
-```bash
-docker compose logs -f
-```
-
-**Stop services:**
-```bash
-docker compose down
-```
-
-**For detailed Docker setup see** [DOCKER_SETUP.md](DOCKER_SETUP.md)
-
----
-
-### Option 2: Local Development (Advanced)
+### Option 1: Local Development (Advanced)
 
 #### Step 1: Install Ollama
 
@@ -275,6 +236,50 @@ npm run dev
 #### Step 4: Access Application
 
 Open your browser to **http://localhost:5173**
+
+
+### Option 2: Docker Compose (Recommended - Works on All Systems)  - Currently having issue with Backend
+
+**Easiest way to run on Windows, Mac, or Linux - no installation needed!**
+
+```bash
+# Step 1: Navigate to project
+cd EK-QE-AI-SUBMISSION
+
+# Step 2: Create environment file
+cp .env.docker .env
+
+# Step 3: Start all services (3 seconds!)
+docker compose up -d
+
+# Step 4: Access the app
+# Frontend: http://localhost:3000
+# Backend: http://localhost:5000/api/health
+# Ollama: http://localhost:11434/api/tags
+```
+
+**What's running:**
+- ✅ Frontend (React)
+- ✅ Backend (Flask API)
+- ✅ Ollama (LLM service)
+- ✅ ChromaDB (vector database with persistent storage)
+
+**See logs:**
+```bash
+docker compose logs -f
+```
+
+**Stop services:**
+```bash
+docker compose down
+```
+
+**For detailed Docker setup see** [DOCKER_SETUP.md](DOCKER_SETUP.md)
+
+---
+
+
+
 
 ### Option 3: Using Startup Script (Windows Only)
 
