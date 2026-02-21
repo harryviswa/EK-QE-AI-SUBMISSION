@@ -97,6 +97,31 @@ def process_document(uploaded_file):
             pass
 
 
+def process_file_path(file_path: str):
+    """Process file from a local path and return document chunks."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    suffix = os.path.splitext(file_path)[1]
+
+    if suffix.lower() == ".pdf":
+        loader = PyMuPDFLoader(file_path)
+    elif suffix.lower() in [".txt"]:
+        loader = TextLoader(file_path)
+    elif suffix.lower() in [".xlsx", ".xls"]:
+        loader = UnstructuredExcelLoader(file_path)
+    else:
+        raise ValueError("Unsupported file type!")
+
+    docs = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=800,
+        chunk_overlap=100,
+        separators=["\n\n", "\n", ".", "?", "!", " ", ""],
+    )
+    return text_splitter.split_documents(docs)
+
+
 def process_url(url: str):
     """Process URL and return document chunks."""
     loader = WebBaseLoader(url)
@@ -185,17 +210,56 @@ def get_embedding_function():
         )
 
 
+def _sanitize_collection_name(name: str) -> str:
+    """Normalize collection names to be Chroma-friendly."""
+    return (
+        name.replace("/", "_")
+        .replace(":", "_")
+        .replace(" ", "_")
+        .replace(".", "_")
+    )
+
+
+def _get_embedding_dimension(embedding_function) -> int:
+    """Determine embedding dimension from the active embedding function."""
+    try:
+        if hasattr(embedding_function, "embed_query"):
+            return len(embedding_function.embed_query("dimension_check"))
+        embeddings = embedding_function(["dimension_check"])
+        return len(embeddings[0]) if embeddings else 0
+    except Exception as e:
+        print(f"[WARN] Failed to determine embedding dimension: {str(e)}")
+        return 0
+
+
 def get_vector_collection():
-    """Get or create ChromaDB collection."""
+    """Get or create ChromaDB collection with dimension-safe naming."""
     embedding_function = get_embedding_function()
     db_path = os.environ.get("CHROMA_DB_PATH", "./harry-rag-chroma-db")
     chroma_client = chromadb.PersistentClient(path=db_path)
-    
-    return chroma_client.get_or_create_collection(
-        name="harry_rag",
-        embedding_function=embedding_function,
-        metadata={"hnsw:space": "cosine"},
+
+    embedding_dim = _get_embedding_dimension(embedding_function)
+    base_name = os.environ.get("CHROMA_COLLECTION_NAME", "harry_rag")
+    model_name = (
+        azure_embedding_model if embedding_provider == "azure" else embedding_model
     )
+    model_suffix = _sanitize_collection_name(model_name)
+    dimension_suffix = f"{embedding_dim}d" if embedding_dim else "unk"
+    collection_name = _sanitize_collection_name(
+        f"{base_name}_{embedding_provider}_{model_suffix}_{dimension_suffix}"
+    )
+
+    collection = chroma_client.get_or_create_collection(
+        name=collection_name,
+        embedding_function=embedding_function,
+        metadata={
+            "hnsw:space": "cosine",
+            "embedding_provider": embedding_provider,
+            "embedding_model": model_name,
+            "embedding_dim": embedding_dim,
+        },
+    )
+    return collection
 
 
 def add_to_vector_collection(all_splits, file_name, user_id):
@@ -257,49 +321,114 @@ def query_collection(prompt, user_id, n_results=10):
 
 def determine_action(user_query, context=""):
     """AI agent determines which action to perform based on user input."""
+    query_lower = user_query.lower()
+    
+    print(f"\n{'='*60}")
+    print(f"[DETERMINE_ACTION] Input query: '{user_query}'")
+    print(f"[DETERMINE_ACTION] Query lowercase: '{query_lower}'")
+    print(f"{'='*60}")
+    
+    # Strong keyword triggers for each action (in priority order)
+    # These are specific enough to avoid false positives
+    action_patterns = [
+        ("testcase_excel", ["generate test case", "create test case", "test cases in excel", 
+                            "test case in jira format", "jira test case", "excel test case",
+                            "testcase excel", "xlsx", "xls format",
+                            "generate test", "test case generation",
+                            "testcase design", "design test case", "test case creation"]),
+        ("validate", ["validate test", "validate test case", "check test case",
+                      "review test case", "improve test case", "test case validation",
+                      "validate existing test"]),
+        ("test_strategy", ["test strategy", "test plan", "test approach",
+                           "test scope", "test level", "testing strategy",
+                           "test methodology", "testing approach"]),
+        ("risk", ["risk assessment", "risk analysis", "risk identification",
+                  "potential risk", "risk mitigation", "risk evaluation"]),
+        ("summary", ["summary", "summarize", "summarise", "overview",
+                     "brief overview", "recap", "summarization"]),
+    ]
+    
+    # Try keyword matching first (most reliable)
+    print(f"[KEYWORD MATCHING] Checking {len(action_patterns)} action patterns...")
+    for action, keywords in action_patterns:
+        print(f"  Action: {action}, Keywords count: {len(keywords)}")
+        for i, keyword in enumerate(keywords):
+            if keyword in query_lower:
+                print(f"    ✓ MATCH at keyword[{i}]: '{keyword}'")
+                print(f"[DETERMINE_ACTION] => RETURNING: '{action}'")
+                print(f"{'='*60}\n")
+                return action
+            else:
+                # Debug: show first few keywords that didn't match
+                if i < 3:
+                    print(f"    ✗ No match: '{keyword}'")
+    
+    print(f"[KEYWORD MATCHING] No keyword match found!")
+    print(f"{'='*60}\n")
+    
+    # If no keyword match, use LLM to decide
     actions_description = """
 Available actions:
 1. ask - Answer general questions based on the knowledge base
 2. summary - Summarize the provided context or documents
-3. testcase_excel - Generate test cases in Excel-compatible format
-4. test_case - Generate test cases in standard format
-5. validate - Validate and analyze existing test cases
-6. test_strategy - Develop a comprehensive test strategy
-7. risk - Perform risk assessment and analysis
+3. testcase_excel - Generate test cases in Excel-compatible JIRA format with S.no, Summary, Description, Preconditions, Step Summary, Expected Results
+4. validate - Analyze and suggest improvements to existing test cases
+5. test_strategy - Develop a comprehensive test strategy
+6. risk - Perform risk assessment and analysis
 
-Based on the user query, determine which action is most appropriate.
-    """
+Respond with ONLY the action name: ask, summary, testcase_excel, validate, test_strategy, or risk"""
     
-    decision_prompt = f"""You are an AI agent that decides which action to perform based on user queries.
+    decision_prompt = f"""You are a QA AI. Choose one action.
 
 {actions_description}
 
 User Query: {user_query}
 
-{f'Context: {context}' if context else ''}
-
-Respond with ONLY the action name from the list (ask, summary, testcase_excel, test_case, validate, test_strategy, or risk). 
-No explanation, just the action name."""
+Answer: """
     
     try:
+        print(f"[LLM DECISION] Consulting LLM for: '{user_query}'")
         response = ollama.chat(
             model=active_model,
             messages=[{"role": "user", "content": decision_prompt}],
             stream=False,
         )
-        action = response["message"]["content"].strip().lower()
-        print(f"AI Agent determined action: {action}")
+        llm_action = response["message"]["content"].strip().lower()
+        print(f"[LLM RESPONSE] Raw: '{llm_action}'")
         
-        # Validate action
-        valid_actions = ["ask", "summary", "testcase_excel", "test_case", "validate", "test_strategy", "risk"]
-        if action not in valid_actions:
-            print(f"Invalid action '{action}', defaulting to 'ask'")
-            return "ask"  # Default to ask if invalid action
+        # Check if LLM response matches exactly
+        valid_actions = ["ask", "summary", "testcase_excel", "validate", "test_strategy", "risk"]
+        # Map test_case to testcase_excel if LLM returns it
+        if llm_action == "test_case":
+            llm_action = "testcase_excel"
+            print(f"[LLM REMAP] Remapped 'test_case' to 'testcase_excel'")
+        if llm_action in valid_actions:
+            print(f"[LLM MATCH] Determined action: {llm_action}")
+            print(f"[DETERMINE_ACTION] => RETURNING: '{llm_action}'")
+            print(f"{'='*60}\n")
+            return llm_action
         
-        return action
+        # Try cleaning up LLM response (remove punctuation, extra text)
+        for action in valid_actions:
+            if action in llm_action:
+                print(f"[LLM PARTIAL MATCH] Found '{action}' in LLM response")
+                print(f"[DETERMINE_ACTION] => RETURNING: '{action}'")
+                print(f"{'='*60}\n")
+                return action
+        
+        # LLM response doesn't match - default to ask
+        print(f"[LLM INVALID] LLM returned unrecognized: '{llm_action}', defaulting to 'ask'")
+        print(f"[DETERMINE_ACTION] => RETURNING: 'ask'")
+        print(f"{'='*60}\n")
+        return "ask"
+        
     except Exception as e:
-        print(f"Error determining action: {str(e)}")
-        return "ask"  # Default to ask on error
+        print(f"[ERROR] determine_action failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print(f"[DETERMINE_ACTION] => RETURNING: 'ask' (error fallback)")
+        print(f"{'='*60}\n")
+        return "ask"
 
 
 def call_llm(context="", sysprompt="", prompt="", spl_prompt="", mode="offline", client=None):

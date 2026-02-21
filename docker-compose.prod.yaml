@@ -46,6 +46,52 @@ services:
           cpus: '1'
           memory: 2G
 
+  # MCP Server - Production optimized
+  mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.mcp
+    container_name: nexqa-mcp-prod
+    restart: always
+    ports:
+      - "8001:8001"
+    environment:
+      - MCP_TRANSPORT=sse
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8001
+      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-NexQA MCP}
+      - MCP_DEFAULT_USER_ID=${MCP_DEFAULT_USER_ID:-mcp_user}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-azure}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text:latest}
+      - CHROMA_DB_PATH=/data/chroma_db
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}
+      - AZURE_EMBEDDING_MODEL=${AZURE_EMBEDDING_MODEL:-text-embedding-ada-002}
+      - AZURE_OPENAI_MODEL=${AZURE_OPENAI_MODEL:-gpt-4}
+    volumes:
+      - chroma_data_prod:/data/chroma_db
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - nexqa-network-prod
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
   # Frontend React App - Production optimized
   frontend:
     build:
@@ -55,6 +101,8 @@ services:
         - VITE_API_URL=http://localhost:5000/api
     container_name: nexqa-frontend-prod
     restart: always
+    ports:
+      - "3000:80"
     environment:
       - VITE_API_URL=http://localhost:5000/api
     depends_on:
@@ -62,7 +110,7 @@ services:
     networks:
       - nexqa-network-prod
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 60s
       timeout: 10s
       retries: 5

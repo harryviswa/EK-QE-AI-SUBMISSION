@@ -1,9 +1,6 @@
-FROM node:18-alpine
+FROM node:18-alpine AS builder
 
 WORKDIR /app
-
-# Install curl for healthcheck
-RUN apk add --no-cache curl
 
 # Copy package files
 COPY package.json package-lock.json ./
@@ -15,12 +12,21 @@ RUN npm ci
 COPY . .
 
 # Build the app
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 
-# Use a lightweight server
-RUN npm install -g serve
+FROM nginx:1.27-alpine
 
-EXPOSE 3000
+# Install curl for healthcheck
+RUN apk add --no-cache curl
 
-# Start the app
-CMD ["serve", "-s", "dist", "-l", "3000"]
+# Copy built assets
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# SPA-friendly nginx config
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

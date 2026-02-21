@@ -33,6 +33,7 @@ from prompts import (
     qa_testcase_validate_prompt,
     qa_risk_prompt,
 )
+from rag_service import run_rag_query
 from utils import generate_pdf
 from swagger_generator import create_api_automation_script
 
@@ -404,121 +405,26 @@ def rag_query():
         top_k = data.get("top_k", 5)
         use_reranking = data.get("use_reranking", True)
 
-        # Retrieve context
-        context_results = query_collection(query_text, user_id, n_results=top_k)
-
-        if not context_results:
-            # Even if no context is found, we can still call the LLM to get a response based on the query alone
-           # return jsonify({"warning": "No relevant context found"}), 200
-            print(f"No context found for query: {query_text}")
-            context_results = query_collection("about", user_id, n_results=top_k)
-
-        context_docs = []
-        if context_results:
-            context_docs = [result["content"] for result in context_results]
-
-        context = "\n\n".join(context_docs[:3]) if context_docs else ""
-        # Re-rank if enabled
-        if use_reranking and len(context_docs) > 1:
-            context_docs = re_rank_cross_encoders(query_text, context_docs)
-
-            context = "\n\n".join(context_docs[:3])  # Use top 3 re-ranked docs
-
-        # List of available actions for AI agent to decide
-        prompt_templates = [
-            {
-                "type": "ask",
-                "description": "Answer general questions based on the knowledge base",
-                "sys_prompt": qa_prompt,
-                "spl_prompt": "Provide a comprehensive answer based on the context.",
-            },
-            {
-                "type": "summary",
-                "description": "Summarize the provided context or documents",
-                "sys_prompt": qa_prompt,
-                "spl_prompt": "Summarize the context in concise bullet points or paragraphs.",
-            },
-            {
-                "type": "testcase_excel",
-                "description": "Generate test cases in Excel-compatible format",
-                "sys_prompt": qa_prompt,
-                "spl_prompt": "Generate test cases in a Markdown table format compatible with Excel import.",
-            },
-            {
-                "type": "test_case",
-                "description": "Generate test cases in standard format",
-                "sys_prompt": qa_testcase_prompt,
-                "spl_prompt": qa_testcase_prompt,
-            },
-            {
-                "type": "validate",
-                "description": "Validate existing test cases",
-                "sys_prompt": qa_prompt,
-                "spl_prompt": qa_testcase_validate_prompt,
-            },
-            {
-                "type": "test_strategy",
-                "description": "Develop a comprehensive test strategy",
-                "sys_prompt": qa_strategy_prompt,
-                "spl_prompt": "Provide a detailed test strategy. Also mention the risks, assumptions and estimated efforts required to complete the testing.",
-            },
-            {
-                "type": "risk",
-                "description": "Perform risk assessment and analysis",
-                "sys_prompt": qa_risk_prompt,
-                "spl_prompt": qa_risk_prompt,
-            },
-        ]
-
-        # Determine which action to use
-        if force_type:
-            # User specified a type, use it if valid
-            determined_action = force_type
-        else:
-            # AI agent determines the action based on user query
-            determined_action = determine_action(query_text, context)
-
-        # Get the selected action from the template list
-        selected_action = next(
-            (action for action in prompt_templates if action["type"] == determined_action),
-            prompt_templates[0]  # Default to 'ask' if action not found
-        )
-
-        sys_prompt = selected_action["sys_prompt"]
-        spl_prompt = selected_action["spl_prompt"]
-        final_action_type = selected_action["type"]
-
-        # Call LLM with proper error handling for long-running operations
         try:
-            response = call_llm(
-                context=context,
-                sysprompt=sys_prompt,
-                prompt=query_text,
-                spl_prompt=spl_prompt,
-                mode="offline",
-                client=None
+            result = run_rag_query(
+                query_text=query_text,
+                user_id=user_id,
+                force_type=force_type,
+                top_k=top_k,
+                use_reranking=use_reranking,
             )
+            print(f"[SERVER] RAG query returned: type={result.get('type')}, query={query_text}")
         except Exception as llm_error:
-            print(f"LLM call error in RAG query: {str(llm_error)}")
+            print(f"[SERVER] LLM call error in RAG query: {str(llm_error)}")
             import traceback
             traceback.print_exc()
             return jsonify({
                 "error": f"LLM processing failed: {str(llm_error)}",
                 "query": query_text,
-                "type": final_action_type
+                "type": force_type or "ask",
             }), 500
 
-        # Return full list of context results so the frontend can display
-        # all knowledge sources (do not slice to top-3 here).
-        return jsonify(
-            {
-                "query": query_text,
-                "type": final_action_type,
-                "context_chunks": len(context_results),
-                "response": response,
-                "sources": context_results,
-            }
-        )
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

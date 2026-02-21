@@ -51,6 +51,25 @@ python server.py
 
 Server runs on http://localhost:5000
 
+### MCP Server (Model Context Protocol)
+
+This project exposes an MCP server with tools that mirror the core backend features.
+
+```bash
+# Run MCP server (stdio transport by default)
+python mcp_server.py
+
+# Optional: run over SSE transport
+MCP_TRANSPORT=sse MCP_HOST=127.0.0.1 MCP_PORT=8001 python mcp_server.py
+```
+
+Available tools:
+- `ingest_document_path` - Ingest a local document by file path
+- `add_url_source` - Ingest a web page as a knowledge source
+- `list_documents` - List ingested documents for a user
+- `search_documents` - Semantic search in vector store
+- `rag_query` - Run full RAG pipeline
+
 ### Docker
 
 ```bash
@@ -123,6 +142,11 @@ OPENAI_API_KEY=sk-...            # Optional
 AZURE_OPENAI_ENDPOINT=...        # Optional
 AZURE_OPENAI_KEY=...             # Optional
 OLLAMA_HOST=http://localhost:11434
+OLLAMA_LLM_MODEL=gemma3:1b
+MCP_TRANSPORT=stdio
+MCP_HOST=127.0.0.1
+MCP_PORT=8001
+MCP_DEFAULT_USER_ID=harry
 ```
 
 ### Customization

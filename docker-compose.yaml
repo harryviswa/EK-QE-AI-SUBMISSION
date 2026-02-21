@@ -34,22 +34,56 @@ services:
       start_period: 40s
     restart: unless-stopped
 
+  # MCP Server
+  mcp:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.mcp
+    container_name: nexqa-mcp
+    ports:
+      - "8001:8001"
+    environment:
+      - MCP_TRANSPORT=sse
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8001
+      - MCP_SERVER_NAME=${MCP_SERVER_NAME:-NexQA MCP}
+      - MCP_DEFAULT_USER_ID=${MCP_DEFAULT_USER_ID:-mcp_user}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - OLLAMA_EMBEDDING_MODEL=${OLLAMA_EMBEDDING_MODEL:-nomic-embed-text:latest}
+      - CHROMA_DB_PATH=/data/chroma_db
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-02-01}
+      - AZURE_EMBEDDING_MODEL=${AZURE_EMBEDDING_MODEL:-text-embedding-ada-002}
+      - AZURE_OPENAI_MODEL=${AZURE_OPENAI_MODEL:-gpt-4}
+    volumes:
+      - chroma_data:/data/chroma_db
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      - ollama
+    networks:
+      - nexqa-network
+    restart: unless-stopped
+
   # Frontend React App
   frontend:
+    container_name: nexqa-frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://localhost:5000/api
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: nexqa-frontend
-    ports:
-      - "3000:3000"
-    environment:
-      - VITE_API_URL=http://localhost:5000/api
+      args:
+        - VITE_API_URL=http://localhost:5000/api
     depends_on:
       - backend
     networks:
       - nexqa-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -68,6 +102,12 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - nexqa-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
 
 # Named volumes for data persistence
