@@ -131,7 +131,9 @@ services:
 
   # Ollama LLM Service - Production optimized
   ollama:
-    image: ollama/ollama:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.ollama
     container_name: nexqa-ollama-prod
     restart: always
     environment:

@@ -1,0 +1,13 @@
+FROM ollama/ollama:latest
+
+# Set environment variables
+ENV OLLAMA_HOST=0.0.0.0:11434
+
+# Create entrypoint script that pulls models and starts ollama
+RUN mkdir -p /app
+COPY ollama-entrypoint.sh /app/
+RUN chmod +x /app/ollama-entrypoint.sh
+
+EXPOSE 11434
+
+ENTRYPOINT ["/app/ollama-entrypoint.sh"]

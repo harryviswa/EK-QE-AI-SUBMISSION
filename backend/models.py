@@ -21,6 +21,16 @@ active_model =  os.environ.get("OLLAMA_LLM_MODEL", "gemma3:1b").lower() #offline
 # Set EMBEDDING_PROVIDER to 'azure' or 'ollama' via environment variable
 embedding_provider = os.environ.get("EMBEDDING_PROVIDER", "ollama").lower()
 embedding_model = os.environ.get("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text:latest")  # For Ollama
+
+# Ollama Host Configuration
+# In Docker, use 'ollama' service name; locally use 'localhost'
+ollama_host = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
+if not ollama_host.startswith("http://") and not ollama_host.startswith("https://"):
+    ollama_host = f"http://{ollama_host}"
+
+# Initialize ollama client
+ollama_client = ollama.Client(host=ollama_host)
+
 azure_embedding_model = os.environ.get("AZURE_EMBEDDING_MODEL", "text-embedding-ada-002")  # For Azure
 cross_encoder_model = ["cross-encoder/ms-marco-MiniLM-L-12-v2", "cross-encoder/ms-marco-MiniLM-L-6-v2"]
 
@@ -29,7 +39,11 @@ cross_encoder_model = ["cross-encoder/ms-marco-MiniLM-L-12-v2", "cross-encoder/m
 class OllamaEmbeddingFunction:
     """Custom Ollama embedding function for ChromaDB."""
     
-    def __init__(self, url: str = "http://localhost:11434/api/embeddings", model_name: str = "nomic-embed-text:latest"):
+    def __init__(self, url: str = None, model_name: str = "nomic-embed-text:latest"):
+        if url is None:
+            # Use environment variable or default to ollama service
+            base_url = ollama_host
+            url = f"{base_url}/api/embeddings"
         self.url = url
         self.model_name = model_name
     
@@ -43,7 +57,7 @@ class OllamaEmbeddingFunction:
         try:
             for text in input:
                 try:
-                    response = ollama.embeddings(model=self.model_name, prompt=text)
+                    response = ollama_client.embeddings(model=self.model_name, prompt=text)
                     embeddings.append(response['embedding'])
                 except Exception as e:
                     print(f"Warning: Failed to generate embedding for text snippet: {str(e)[:100]}")
@@ -197,7 +211,7 @@ def get_embedding_function():
         print(f"Using Ollama embeddings: {embedding_model}")
         try:
             # Test Ollama connection
-            test_response = ollama.embeddings(model=embedding_model, prompt="test")
+            test_response = ollama_client.embeddings(model=embedding_model, prompt="test")
             if test_response and 'embedding' in test_response:
                 print(f"[OK] Ollama connection successful")
         except Exception as e:
@@ -205,7 +219,7 @@ def get_embedding_function():
             print(f"       Proceeding with Ollama embeddings (will retry on each request)")
         
         return OllamaEmbeddingFunction(
-            url="http://localhost:11434/api/embeddings",
+            url=f"{ollama_host}/api/embeddings",
             model_name=embedding_model,
         )
 
@@ -388,7 +402,7 @@ Answer: """
     
     try:
         print(f"[LLM DECISION] Consulting LLM for: '{user_query}'")
-        response = ollama.chat(
+        response = ollama_client.chat(
             model=active_model,
             messages=[{"role": "user", "content": decision_prompt}],
             stream=False,
@@ -444,7 +458,7 @@ def call_llm(context="", sysprompt="", prompt="", spl_prompt="", mode="offline",
                 f"Requirements:\n{spl_prompt}\n\n"
                 "Now provide your response:"
             )
-            response = ollama.chat(
+            response = ollama_client.chat(
                 model=active_model,
                 messages=[
                     {"role": "system", "content": sysprompt},

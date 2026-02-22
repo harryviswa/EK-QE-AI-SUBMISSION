@@ -99,10 +99,16 @@ def rag_query(
 
 if __name__ == "__main__":
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
-    host = os.environ.get("MCP_HOST", "127.0.0.1")
-    port = int(os.environ.get("MCP_PORT", "8001"))
-
+    
     if transport == "sse":
-        mcp.run(transport="sse", host=host, port=port)
+        # For SSE transport, FastMCP needs to be run with uvicorn
+        import uvicorn
+        host = os.environ.get("MCP_HOST", "0.0.0.0")
+        port = int(os.environ.get("MCP_PORT", "8001"))
+        
+        # Run FastMCP as an ASGI app via uvicorn
+        # FastMCP creates the ASGI app internally
+        uvicorn.run("mcp_server:mcp", host=host, port=port, log_level="info", factory=False)
     else:
+        # For stdio transport        
         mcp.run()

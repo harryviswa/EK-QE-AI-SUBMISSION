@@ -17,4 +17,5 @@ unstructured==0.10.30
 openpyxl==3.1.2
 sentence-transformers==2.7.0
 mcp>=1.0.0
+uvicorn[standard]>=0.30.0
 python-dotenv==1.0.0
