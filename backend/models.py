@@ -520,6 +520,64 @@ def call_llm(context="", sysprompt="", prompt="", spl_prompt="", mode="offline",
             raise Exception(f"Azure OpenAI call failed: {str(e)}")
 
 
+def call_llm_stream(context="", sysprompt="", prompt="", spl_prompt="", mode="offline", client=None):
+    """Stream LLM response chunks (offline/Ollama only)."""
+    if mode != "offline":
+        raise ValueError("Streaming is only supported in offline mode currently.")
+
+    try:
+        user_message = (
+            f"Context:\n{context}\n\n"
+            f"Question:\n{prompt}\n\n"
+            f"Requirements:\n{spl_prompt}\n\n"
+            "Now provide your response:"
+        )
+        response = ollama_client.chat(
+            model=active_model,
+            messages=[
+                {"role": "system", "content": sysprompt},
+                {"role": "user", "content": user_message},
+            ],
+            stream=True,
+        )
+        emitted = ""
+        for chunk in response:
+            if not chunk:
+                continue
+
+            content = ""
+            if isinstance(chunk, dict):
+                if isinstance(chunk.get("message"), dict):
+                    content = chunk["message"].get("content") or ""
+                elif "response" in chunk:
+                    content = chunk.get("response") or ""
+                elif "delta" in chunk:
+                    delta = chunk.get("delta")
+                    if isinstance(delta, dict):
+                        content = delta.get("content") or ""
+                    elif isinstance(delta, str):
+                        content = delta
+
+            if content:
+                emitted += content
+                yield content
+
+            # Some Ollama builds only include content in the final message
+            if isinstance(chunk, dict) and chunk.get("done"):
+                final_content = ""
+                if isinstance(chunk.get("message"), dict):
+                    final_content = chunk["message"].get("content") or ""
+                if final_content and final_content != emitted:
+                    if final_content.startswith(emitted):
+                        remainder = final_content[len(emitted):]
+                        if remainder:
+                            yield remainder
+                    else:
+                        yield final_content
+    except Exception as e:
+        raise Exception(f"Ollama LLM stream failed: {str(e)}")
+
+
 def re_rank_cross_encoders(query, documents):
     """Re-rank documents using cross-encoder."""
     if not documents or len(documents) == 0:
@@ -550,12 +608,37 @@ def re_rank_cross_encoders(query, documents):
 
 def list_vector_sources(user_id):
     """List all document sources for a user."""
-    collection = get_vector_collection()
-    all_metadatas = collection.get(include=["metadatas"])["metadatas"]
+    db_path = os.environ.get("CHROMA_DB_PATH", "./harry-rag-chroma-db")
+    chroma_client = chromadb.PersistentClient(path=db_path)
+
+    base_name = os.environ.get("CHROMA_COLLECTION_NAME", "harry_rag")
+    model_name = (
+        azure_embedding_model if embedding_provider == "azure" else embedding_model
+    )
+    model_suffix = _sanitize_collection_name(model_name)
+    provider = embedding_provider
+    prefix = _sanitize_collection_name(f"{base_name}_{provider}_{model_suffix}_")
+
+    collections = chroma_client.list_collections()
+    collection_names = []
+    for col in collections:
+        if hasattr(col, "name"):
+            collection_names.append(col.name)
+        elif isinstance(col, dict) and "name" in col:
+            collection_names.append(col["name"])
+
+    matching_names = [name for name in collection_names if name.startswith(prefix)]
+    if not matching_names:
+        return []
+
+    # Use the most recent/lexicographically last matching collection
+    selected_name = sorted(matching_names)[-1]
+    collection = chroma_client.get_collection(name=selected_name)
+    all_metadatas = collection.get(include=["metadatas"]).get("metadatas", [])
     
     sources = set()
     for meta in all_metadatas:
-        if meta.get("user_id") != user_id:
+        if not meta or meta.get("user_id") != user_id:
             continue
         source = meta.get("source") or meta.get("file_name") or meta.get("url")
         if source:

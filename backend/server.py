@@ -4,14 +4,18 @@ NexQA.ai Backend API - Flask-based REST API for RAG operations
 import os
 import io
 import uuid
+import json
 from datetime import datetime
 from functools import wraps
 
 import pandas as pd
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
 from werkzeug.serving import WSGIRequestHandler
+
+# Load environment variables before importing modules that read them
+load_dotenv(override=True)
 
 from models import (
     active_model,
@@ -33,11 +37,10 @@ from prompts import (
     qa_testcase_validate_prompt,
     qa_risk_prompt,
 )
-from rag_service import run_rag_query
+from rag_service import run_rag_query, stream_rag_query
 from utils import generate_pdf
 from swagger_generator import create_api_automation_script
-
-load_dotenv()
+from log_analyzer import AutomationLogAnalyzer, generate_llm_insights
 
 app = Flask(__name__)
 CORS(app)
@@ -47,13 +50,19 @@ WSGIRequestHandler.timeout = 300  # 5 minutes
 
 # Configuration
 UPLOAD_FOLDER = "uploads"
+LOG_UPLOAD_FOLDER = "automation_logs"
 ALLOWED_EXTENSIONS = {"pdf", "txt", "xlsx", "xls"}
+LOG_EXTENSIONS = {"xml", "html", "log", "junit"}
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max file size
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+if not os.path.exists(LOG_UPLOAD_FOLDER):
+    os.makedirs(LOG_UPLOAD_FOLDER)
+
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+app.config["LOG_UPLOAD_FOLDER"] = LOG_UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
 
@@ -366,6 +375,169 @@ def validate_testcases_quick():
         return jsonify({"error": str(e)}), 500
 
 
+# ==================== AUTOMATION LOG ANALYSIS ====================
+
+
+@app.route("/api/logs/analyze-folder", methods=["POST"])
+def analyze_log_folder():
+    """Analyze automation logs from a folder path."""
+    try:
+        user_id = get_user_id()
+        data = request.get_json()
+
+        if not data or "folder_path" not in data:
+            return jsonify({"error": "Folder path not provided"}), 400
+
+        folder_path = data["folder_path"].strip()
+        generate_insights = data.get("generate_insights", True)
+
+        # Security: Prevent path traversal
+        if ".." in folder_path or folder_path.startswith("/"):
+            return jsonify({"error": "Invalid folder path"}), 400
+
+        # Resolve absolute path
+        if not os.path.isabs(folder_path):
+            folder_path = os.path.abspath(folder_path)
+
+        if not os.path.isdir(folder_path):
+            return jsonify({"error": f"Folder not found: {folder_path}"}), 404
+
+        print(f"[LOG ANALYSIS] Analyzing folder: {folder_path}")
+
+        # Analyze logs
+        analyzer = AutomationLogAnalyzer()
+        analysis_results = analyzer.analyze_log_folder(folder_path)
+        summary = analyzer.get_summary()
+
+        result = {
+            "status": "success",
+            "folder": folder_path,
+            "user_id": user_id,
+            "analysis_results": analysis_results,
+            "summary": summary,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        # Generate LLM insights if requested
+        if generate_insights and summary.get("total_tests", 0) > 0:
+            try:
+                print("[LOG ANALYSIS] Generating LLM insights...")
+                insights = generate_llm_insights(summary, call_llm)
+                result["insights"] = insights
+            except Exception as e:
+                print(f"[LOG ANALYSIS] Error generating insights: {str(e)}")
+                result["insights"] = f"Unable to generate insights: {str(e)}"
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"[LOG ANALYSIS] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "status": "failed"}), 500
+
+
+@app.route("/api/logs/upload", methods=["POST"])
+def upload_log_files():
+    """Upload automation log files (supports multiple files)."""
+    try:
+        user_id = get_user_id()
+
+        if "files" not in request.files:
+            return jsonify({"error": "No files provided"}), 400
+
+        files = request.files.getlist("files")
+        if not files or len(files) == 0:
+            return jsonify({"error": "No files selected"}), 400
+
+        # Create user-specific log folder
+        user_log_folder = os.path.join(LOG_UPLOAD_FOLDER, user_id)
+        if not os.path.exists(user_log_folder):
+            os.makedirs(user_log_folder)
+
+        uploaded_files = []
+        for file in files:
+            if file.filename == "":
+                continue
+
+            # Check file extension
+            file_ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else ""
+            if file_ext not in LOG_EXTENSIONS:
+                continue
+
+            # Save file
+            filename = os.path.join(user_log_folder, file.filename)
+            file.save(filename)
+            uploaded_files.append(file.filename)
+
+        if not uploaded_files:
+            return jsonify({"error": "No valid log files uploaded"}), 400
+
+        print(f"[LOG UPLOAD] Uploaded {len(uploaded_files)} files to {user_log_folder}")
+
+        # Analyze the uploaded logs
+        analyzer = AutomationLogAnalyzer()
+        analysis_results = analyzer.analyze_log_folder(user_log_folder)
+        summary = analyzer.get_summary()
+
+        result = {
+            "status": "success",
+            "uploaded_files": uploaded_files,
+            "folder": user_log_folder,
+            "file_count": len(uploaded_files),
+            "analysis_results": analysis_results,
+            "summary": summary,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        # Generate insights automatically
+        try:
+            print("[LOG UPLOAD] Generating LLM insights...")
+            insights = generate_llm_insights(summary, call_llm)
+            result["insights"] = insights
+        except Exception as e:
+            print(f"[LOG UPLOAD] Error generating insights: {str(e)}")
+            result["insights"] = f"Unable to generate insights: {str(e)}"
+
+        return jsonify(result)
+
+    except Exception as e:
+        print(f"[LOG UPLOAD] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e), "status": "failed"}), 500
+
+
+@app.route("/api/logs/summary", methods=["GET"])
+def get_logs_summary():
+    """Get summary of previously analyzed logs."""
+    try:
+        user_id = get_user_id()
+        user_log_folder = os.path.join(LOG_UPLOAD_FOLDER, user_id)
+
+        if not os.path.exists(user_log_folder):
+            return jsonify({
+                "status": "no_logs",
+                "message": "No logs found for this user",
+                "summary": {}
+            })
+
+        analyzer = AutomationLogAnalyzer()
+        analysis_results = analyzer.analyze_log_folder(user_log_folder)
+        summary = analyzer.get_summary()
+
+        return jsonify({
+            "status": "success",
+            "folder": user_log_folder,
+            "analysis_results": analysis_results,
+            "summary": summary,
+        })
+
+    except Exception as e:
+        print(f"[LOG SUMMARY] Error: {str(e)}")
+        return jsonify({"error": str(e), "status": "failed"}), 500
+
+
 # ==================== QUERY & RAG ====================
 
 
@@ -425,6 +597,92 @@ def rag_query():
             }), 500
 
         return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _sse_event(event_name: str, payload: dict) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.route("/api/query/rag/stream", methods=["POST"])
+def rag_query_stream():
+    """RAG query with streaming response (SSE)."""
+    try:
+        user_id = get_user_id()
+        data = request.get_json()
+
+        if not data or "query" not in data:
+            return jsonify({"error": "Query not provided"}), 400
+
+        query_text = data["query"]
+        force_type = data.get("type", None)
+        top_k = data.get("top_k", 5)
+        use_reranking = data.get("use_reranking", True)
+
+        try:
+            result = stream_rag_query(
+                query_text=query_text,
+                user_id=user_id,
+                force_type=force_type,
+                top_k=top_k,
+                use_reranking=use_reranking,
+            )
+            print(f"[SERVER] RAG stream started: type={result.get('type')}, query={query_text}")
+        except Exception as llm_error:
+            print(f"[SERVER] LLM call error in RAG stream: {str(llm_error)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                "error": f"LLM processing failed: {str(llm_error)}",
+                "query": query_text,
+                "type": force_type or "ask",
+            }), 500
+
+        def generate():
+            try:
+                meta_payload = {
+                    "query": result.get("query"),
+                    "type": result.get("type"),
+                    "context_chunks": result.get("context_chunks"),
+                    "sources": result.get("sources") or [],
+                }
+                yield _sse_event("meta", meta_payload)
+
+                full_response = ""
+                for token in result.get("stream"):
+                    full_response += token
+                    yield _sse_event("token", {"token": token})
+
+                if not full_response:
+                    try:
+                        fallback = run_rag_query(
+                            query_text=query_text,
+                            user_id=user_id,
+                            force_type=force_type,
+                            top_k=top_k,
+                            use_reranking=use_reranking,
+                        )
+                        full_response = fallback.get("response", "") or ""
+                    except Exception as fallback_error:
+                        yield _sse_event("error", {"error": str(fallback_error)})
+
+                yield _sse_event("done", {
+                    "response": full_response,
+                    "type": result.get("type"),
+                })
+            except Exception as e:
+                yield _sse_event("error", {"error": str(e)})
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

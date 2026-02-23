@@ -13,6 +13,8 @@ export const QueryChat = React.forwardRef((props, ref) => {
   const [isLoading, setIsLoading] = useState(false);
   const [queryType, setQueryType] = useState(null); // AI agent decides if null
   const messagesEndRef = useRef(null);
+  const simulatedStreamRef = useRef(null);
+  const streamedTokenCountRef = useRef(0);
 
   // Expose method to add messages from external components
   React.useImperativeHandle(ref, () => ({
@@ -33,29 +35,114 @@ export const QueryChat = React.forwardRef((props, ref) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
-    const userMessage = { role: 'user', content: input };
-    setMessages((prev) => [...prev, userMessage]);
+    if (simulatedStreamRef.current) {
+      clearInterval(simulatedStreamRef.current);
+      simulatedStreamRef.current = null;
+    }
+    streamedTokenCountRef.current = 0;
+
+    const userMessage = { id: `u_${Date.now()}`, role: 'user', content: input };
+    const assistantId = `a_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const assistantMessage = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      sources: [],
+      actionType: null,
+      isStreaming: true,
+    };
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setInput('');
     setIsLoading(true);
 
     try {
-      const response = await apiClient.ragQuery(input, queryType);
-      console.log('RAG Response:', response.data);
-      console.log('Detected action type:', response.data.type);
-      const assistantMessage = {
-        role: 'assistant',
-        content: response.data.response,
-        sources: response.data.sources,
-        actionType: response.data.type, // Capture the action type that was used
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-      toast.success(`✓ ${response.data.type.charAt(0).toUpperCase() + response.data.type.slice(1).replace(/_/g, ' ')} action completed`);
+      await apiClient.ragQueryStream(input, queryType, 5, true, {
+        onMeta: (meta) => {
+          setMessages((prev) => prev.map((m) => (
+            m.id === assistantId
+              ? { ...m, actionType: meta?.type || m.actionType, sources: meta?.sources || m.sources }
+              : m
+          )));
+        },
+        onToken: (token) => {
+          if (!token) return;
+          streamedTokenCountRef.current += 1;
+          setMessages((prev) => prev.map((m) => (
+            m.id === assistantId
+              ? { ...m, content: `${m.content || ''}${token}` }
+              : m
+          )));
+        },
+        onDone: (done) => {
+          const actionType = done?.type;
+          const finalText = done?.response || '';
+          const shouldSimulate = streamedTokenCountRef.current === 0 && finalText;
+          if (shouldSimulate) {
+            let idx = 0;
+            const chunkSize = 20;
+            setMessages((prev) => prev.map((m) => (
+              m.id === assistantId
+                ? { ...m, actionType: actionType || m.actionType, content: '', isStreaming: true }
+                : m
+            )));
+            simulatedStreamRef.current = setInterval(() => {
+              idx += chunkSize;
+              const slice = finalText.slice(0, idx);
+              setMessages((prev) => prev.map((m) => (
+                m.id === assistantId
+                  ? { ...m, content: slice, isStreaming: idx < finalText.length }
+                  : m
+              )));
+              if (idx >= finalText.length) {
+                clearInterval(simulatedStreamRef.current);
+                simulatedStreamRef.current = null;
+              }
+            }, 30);
+          } else {
+            setMessages((prev) => prev.map((m) => (
+              m.id === assistantId
+                ? {
+                    ...m,
+                    actionType: actionType || m.actionType,
+                    content: m.content || finalText || m.content,
+                    isStreaming: false,
+                  }
+                : m
+            )));
+          }
+
+          if (actionType) {
+            toast.success(`✓ ${actionType.charAt(0).toUpperCase() + actionType.slice(1).replace(/_/g, ' ')} action completed`);
+          } else {
+            toast.success('✓ Response completed');
+          }
+          setIsLoading(false);
+        },
+        onError: (err) => {
+          const errorMessage = err?.error || err?.message || 'Failed to get response';
+          setMessages((prev) => prev.map((m) => (
+            m.id === assistantId
+              ? { ...m, content: errorMessage, isError: true, isStreaming: false }
+              : m
+          )));
+          toast.error('Query failed');
+          setIsLoading(false);
+        },
+      });
     } catch (err) {
       console.error('Error:', err);
-      setMessages((prev) => [...prev, { role: 'assistant', content: err?.response?.data?.error || 'Failed to get response', isError: true }]);
+      const errorMessage = err?.response?.data?.error || err?.message || 'Failed to get response';
+      setMessages((prev) => prev.map((m) => (
+        m.id === assistantId
+          ? { ...m, content: errorMessage, isError: true, isStreaming: false }
+          : m
+      )));
       toast.error('Query failed');
-    } finally {
       setIsLoading(false);
+    } finally {
+      if (isLoading) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -157,6 +244,22 @@ export const QueryChat = React.forwardRef((props, ref) => {
     if (!txt) return '';
     // Normalize line endings
     let s = String(txt).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    const hasBullets = /^\s*[-*]\s+/m.test(s) || /^\s*\d+\./m.test(s);
+    if (!hasBullets) {
+      const lines = s.split('\n');
+      const bulletized = lines.map((ln) => {
+        const t = ln.trim();
+        if (!t) return '';
+        if (/^[A-Z][A-Za-z0-9\s\-\(\)\.,]{0,120}:\s+/.test(t)) {
+          const [label, ...rest] = t.split(':');
+          const tail = rest.join(':').trim();
+          return `- **${label.trim()}**: ${tail}`;
+        }
+        return t;
+      });
+      s = bulletized.join('\n');
+    }
 
     // Split into lines and convert obvious section headings (e.g. "Validation Analysis:")
     // into markdown headings so they render distinctly.
@@ -355,7 +458,7 @@ export const QueryChat = React.forwardRef((props, ref) => {
           </div>
         ) : (
           messages.map((msg, idx) => (
-            <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div key={msg.id || idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div>
                 {msg.role === 'assistant' && msg.actionType && !msg.isError && (
                   <div className="mb-2 flex items-center gap-2">
