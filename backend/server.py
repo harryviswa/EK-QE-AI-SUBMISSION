@@ -40,7 +40,7 @@ from prompts import (
 from rag_service import run_rag_query, stream_rag_query
 from utils import generate_pdf
 from swagger_generator import create_api_automation_script
-from log_analyzer import AutomationLogAnalyzer, generate_llm_insights
+from log_analyzer import AutomationLogAnalyzer, generate_llm_insights, generate_llm_metrics, generate_test_forecast, identify_missing_test_cases
 
 app = Flask(__name__)
 CORS(app)
@@ -390,6 +390,9 @@ def analyze_log_folder():
 
         folder_path = data["folder_path"].strip()
         generate_insights = data.get("generate_insights", True)
+        generate_metrics = data.get("generate_metrics", True)
+        generate_forecast = data.get("generate_forecast", True)
+        identify_gaps = data.get("identify_gaps", True)
 
         # Security: Prevent path traversal
         if ".." in folder_path or folder_path.startswith("/"):
@@ -427,6 +430,36 @@ def analyze_log_folder():
             except Exception as e:
                 print(f"[LOG ANALYSIS] Error generating insights: {str(e)}")
                 result["insights"] = f"Unable to generate insights: {str(e)}"
+
+        # Generate structured LLM metrics if requested
+        if generate_metrics:
+            try:
+                print("[LOG ANALYSIS] Generating LLM metrics...")
+                result["llm_metrics"] = generate_llm_metrics(summary, call_llm)
+            except Exception as e:
+                print(f"[LOG ANALYSIS] Error generating metrics: {str(e)}")
+                result["llm_metrics"] = {"status": "failed", "error": str(e)}
+
+        # Generate forecast if requested
+        if generate_forecast and summary.get("total_tests", 0) > 0:
+            try:
+                print("[LOG ANALYSIS] Generating test forecast...")
+                result["forecast"] = generate_test_forecast(summary, call_llm)
+            except Exception as e:
+                print(f"[LOG ANALYSIS] Error generating forecast: {str(e)}")
+                result["forecast"] = f"Unable to generate forecast: {str(e)}"
+
+        # Identify missing test cases using knowledge base
+        if identify_gaps and summary.get("total_tests", 0) > 0:
+            try:
+                print("[LOG ANALYSIS] Identifying missing test cases from knowledge base...")
+                # Query knowledge base for relevant context
+                test_context = f"Test coverage analysis for {summary.get('total_tests')} tests"
+                kb_results = query_collection(test_context, user_id, n_results=5)
+                result["missing_test_cases"] = identify_missing_test_cases(summary, kb_results, call_llm)
+            except Exception as e:
+                print(f"[LOG ANALYSIS] Error identifying gaps: {str(e)}")
+                result["missing_test_cases"] = f"Unable to identify test gaps: {str(e)}"
 
         return jsonify(result)
 
@@ -498,6 +531,32 @@ def upload_log_files():
         except Exception as e:
             print(f"[LOG UPLOAD] Error generating insights: {str(e)}")
             result["insights"] = f"Unable to generate insights: {str(e)}"
+
+        # Generate structured LLM metrics automatically
+        try:
+            print("[LOG UPLOAD] Generating LLM metrics...")
+            result["llm_metrics"] = generate_llm_metrics(summary, call_llm)
+        except Exception as e:
+            print(f"[LOG UPLOAD] Error generating metrics: {str(e)}")
+            result["llm_metrics"] = {"status": "failed", "error": str(e)}
+
+        # Generate forecast automatically
+        try:
+            print("[LOG UPLOAD] Generating test forecast...")
+            result["forecast"] = generate_test_forecast(summary, call_llm)
+        except Exception as e:
+            print(f"[LOG UPLOAD] Error generating forecast: {str(e)}")
+            result["forecast"] = f"Unable to generate forecast: {str(e)}"
+
+        # Identify missing test cases using knowledge base
+        try:
+            print("[LOG UPLOAD] Identifying missing test cases from knowledge base...")
+            test_context = f"Test coverage analysis for {summary.get('total_tests')} tests"
+            kb_results = query_collection(test_context, user_id, n_results=5)
+            result["missing_test_cases"] = identify_missing_test_cases(summary, kb_results, call_llm)
+        except Exception as e:
+            print(f"[LOG UPLOAD] Error identifying gaps: {str(e)}")
+            result["missing_test_cases"] = f"Unable to identify test gaps: {str(e)}"
 
         return jsonify(result)
 

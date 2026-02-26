@@ -5,6 +5,7 @@ Supports: JUnit XML, HTML reports, plain text logs, pytest reports
 import os
 import re
 import json
+import hashlib
 from typing import Dict, List, Any
 from xml.etree import ElementTree as ET
 from datetime import datetime
@@ -47,6 +48,37 @@ class AutomationLogAnalyzer:
         html_files = [f for f in all_files if f.suffix.lower() == '.html']
         log_files = [f for f in all_files if f.suffix.lower() in ['.log', '.txt']]
         
+        # Detect and skip duplicate files using content hash
+        def get_file_hash(filepath: str) -> str:
+            """Calculate MD5 hash of file content."""
+            try:
+                with open(filepath, 'rb') as f:
+                    return hashlib.md5(f.read()).hexdigest()
+            except Exception:
+                return None
+        
+        def deduplicate_files(file_list: List) -> List:
+            """Remove duplicate files based on content hash."""
+            seen_hashes = set()
+            unique_files = []
+            duplicates_skipped = 0
+            for file_path in file_list:
+                file_hash = get_file_hash(str(file_path))
+                if file_hash and file_hash not in seen_hashes:
+                    seen_hashes.add(file_hash)
+                    unique_files.append(file_path)
+                elif file_hash:
+                    duplicates_skipped += 1
+                    print(f"[LOG ANALYZER] Skipping duplicate file: {file_path.name}")
+            if duplicates_skipped > 0:
+                print(f"[LOG ANALYZER] Skipped {duplicates_skipped} duplicate file(s)")
+            return unique_files
+        
+        # Remove duplicates from each file type
+        xml_files = deduplicate_files(xml_files)
+        html_files = deduplicate_files(html_files)
+        log_files = deduplicate_files(log_files)
+        
         results = {
             "xml_results": [],
             "html_results": [],
@@ -69,6 +101,7 @@ class AutomationLogAnalyzer:
             try:
                 result = self.parse_html_report(str(html_file))
                 results["html_results"].append(result)
+                self._merge_metrics(result.get("metrics", {}))
             except Exception as e:
                 print(f"Error parsing HTML {html_file}: {str(e)}")
         
@@ -77,6 +110,7 @@ class AutomationLogAnalyzer:
             try:
                 result = self.parse_log_file(str(log_file))
                 results["log_results"].append(result)
+                self._merge_metrics(result.get("metrics", {}))
             except Exception as e:
                 print(f"Error parsing log {log_file}: {str(e)}")
         
@@ -187,7 +221,40 @@ class AutomationLogAnalyzer:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
-            # Common HTML patterns for test metrics
+            # Extent Spark report (common in automation)
+            status_group_match = re.search(r'var\s+statusGroup\s*=\s*\{([^}]+)\}', content)
+            if status_group_match:
+                status_blob = status_group_match.group(1)
+                def _get_int(key: str) -> int:
+                    m = re.search(rf'{key}\s*:\s*(\d+)', status_blob)
+                    return int(m.group(1)) if m else 0
+
+                metrics["total_tests"] = _get_int("parentCount")
+                metrics["passed"] = _get_int("passParent")
+                metrics["failed"] = _get_int("failParent")
+                metrics["skipped"] = _get_int("skipParent") + _get_int("warningParent")
+
+            # Fallback: count test items by status in Extent HTML
+            if metrics["total_tests"] == 0:
+                status_counts = {
+                    "pass": len(re.findall(r'\bstatus\s*=\s*"pass"', content, re.IGNORECASE)),
+                    "fail": len(re.findall(r'\bstatus\s*=\s*"fail"', content, re.IGNORECASE)),
+                    "skip": len(re.findall(r'\bstatus\s*=\s*"skip"', content, re.IGNORECASE)),
+                    "warning": len(re.findall(r'\bstatus\s*=\s*"warning"', content, re.IGNORECASE)),
+                }
+                metrics["passed"] = status_counts["pass"]
+                metrics["failed"] = status_counts["fail"]
+                metrics["skipped"] = status_counts["skip"] + status_counts["warning"]
+                metrics["total_tests"] = sum(status_counts.values())
+
+            # Extract execution timeline (Extent Spark uses seconds per test)
+            timeline_match = re.search(r'var\s+timeline\s*=\s*\{([^}]+)\}', content)
+            if timeline_match:
+                timeline_blob = timeline_match.group(1)
+                durations = re.findall(r':\s*([\d.]+)', timeline_blob)
+                metrics["execution_time"] = round(sum(float(d) for d in durations), 3)
+
+            # Common HTML patterns for test metrics (fallback)
             patterns = {
                 "passed": [
                     r'passed["\']?\s*:?\s*(\d+)',
@@ -214,15 +281,19 @@ class AutomationLogAnalyzer:
                     r'([\d.]+)\s*(?:ms|seconds|s)',
                 ],
             }
-            
+
             for metric, pattern_list in patterns.items():
+                if metric in ["passed", "failed", "skipped", "total"] and metrics.get(metric if metric != "total" else "total_tests"):
+                    continue
+                if metric == "time" and metrics.get("execution_time"):
+                    continue
                 for pattern in pattern_list:
                     match = re.search(pattern, content, re.IGNORECASE)
                     if match:
                         try:
                             value = float(match.group(1)) if metric == "time" else int(match.group(1))
                             metrics[metric if metric != "total" else "total_tests"] = value
-                        except:
+                        except Exception:
                             pass
                         break
         
@@ -402,14 +473,24 @@ Top Failed Tests:
 Test Suites Count: {analyzer_summary['test_suites_count']}
 """
     
-    prompt = """Based on the automation test run analysis above, provide:
-1. Overall status and health of the test suite
-2. Key issues and failures to address
-3. Recommendations for improvement
-4. Performance assessment
-5. Risk assessment based on failure patterns
+    prompt = """Based on the automation test run analysis above, provide a comprehensive assessment in Markdown format:
 
-Be concise but comprehensive."""
+## 1. Overall Status and Health
+(Brief assessment of the test suite's current state)
+
+## 2. Key Issues and Failures
+(Prioritized list of critical issues to address)
+
+## 3. Recommendations for Improvement
+(Actionable suggestions with specific steps)
+
+## 4. Performance Assessment
+(Execution time, efficiency observations)
+
+## 5. Risk Assessment
+(Failure patterns and potential impact)
+
+Use bullet points, bold text for emphasis, and clear headings. Be concise but comprehensive."""
     
     special_prompt = "Focus on actionable insights and root cause analysis."
     
@@ -424,3 +505,209 @@ Be concise but comprehensive."""
     except Exception as e:
         print(f"Error generating LLM insights: {str(e)}")
         return "Unable to generate insights. Please check the log analysis results above."
+
+
+def generate_test_forecast(analyzer_summary: Dict[str, Any], llm_function, sysprompt: str = "") -> str:
+    """Generate test health forecast and trend predictions using LLM."""
+    
+    if analyzer_summary.get("error"):
+        return f"No forecast possible: {analyzer_summary.get('error')}"
+    
+    context = f"""
+Current Test Run Metrics:
+========================
+Total Tests: {analyzer_summary['total_tests']}
+Passed: {analyzer_summary['passed']} ({analyzer_summary['pass_rate']}%)
+Failed: {analyzer_summary['failed']}
+Skipped: {analyzer_summary['skipped']}
+Success Rate: {analyzer_summary['success_rate']}%
+Execution Time: {analyzer_summary['execution_time']}s
+
+Common Error Types:
+{json.dumps(analyzer_summary['common_errors'], indent=2)}
+
+Failed Tests Count: {analyzer_summary['failed_tests_count']}
+"""
+    
+    prompt = """Based on the current test metrics, provide a forward-looking forecast in Markdown format:
+
+## Test Health Trajectory
+(Predict if test health is improving, degrading, or stable based on current metrics)
+
+## Likely Future Issues
+(Anticipate problems that may emerge based on current patterns)
+
+## Stability Forecast (Next 3-5 Runs)
+(Predict expected pass rate range and confidence level)
+
+## Recommended Preventive Actions
+(Proactive steps to maintain or improve test health)
+
+## Risk Timeline
+(When issues might escalate if unaddressed)
+
+Use bullet points, percentages, and clear language. Be data-driven and realistic."""
+    
+    special_prompt = "Focus on predictive insights and trend analysis. Be specific about timeframes and probabilities."
+    
+    try:
+        forecast = llm_function(
+            context=context,
+            sysprompt=sysprompt or "You are a QA analytics expert specializing in test trend forecasting and predictive analysis.",
+            prompt=prompt,
+            spl_prompt=special_prompt,
+        )
+        return forecast
+    except Exception as e:
+        print(f"Error generating forecast: {str(e)}")
+        return "Unable to generate forecast. Insufficient data or analysis service unavailable."
+
+
+def identify_missing_test_cases(analyzer_summary: Dict[str, Any], knowledge_base_context: List[Dict[str, Any]], llm_function, sysprompt: str = "") -> str:
+    """Identify missing test cases by comparing test logs against knowledge base."""
+    
+    if analyzer_summary.get("error"):
+        return f"No gap analysis possible: {analyzer_summary.get('error')}"
+    
+    if not knowledge_base_context or len(knowledge_base_context) == 0:
+        return "**No knowledge base available.** Upload documentation or requirements to enable test gap analysis."
+    
+    # Extract knowledge base content
+    kb_content = "\n\n".join([doc.get("content", "")[:500] for doc in knowledge_base_context[:5]])
+    
+    context = f"""
+Executed Tests Summary:
+======================
+Total Tests Executed: {analyzer_summary['total_tests']}
+Test Suites: {analyzer_summary['test_suites_count']}
+
+Failed Tests:
+{json.dumps(analyzer_summary.get('top_failed_tests', []), indent=2)}
+
+Knowledge Base (Requirements/Specifications):
+============================================
+{kb_content}
+
+Common Error Types:
+{json.dumps(analyzer_summary.get('common_errors', {}), indent=2)}
+"""
+    
+    prompt = """Analyze the executed tests against the knowledge base and identify missing test scenarios in Markdown format:
+
+## Coverage Gaps Identified
+(List test scenarios present in requirements but missing from execution)
+
+## Edge Cases Not Covered
+(Boundary conditions, error handling scenarios not tested)
+
+## Integration Points Missing
+(API endpoints, workflows, or integrations not validated)
+
+## Recommended Additional Tests
+(High-priority test cases to add, with brief justification)
+
+## Coverage Improvement Priority
+(Rank gaps by risk/impact: Critical, High, Medium, Low)
+
+Be specific about what's missing. Reference actual requirements where possible."""
+    
+    special_prompt = "Focus on actionable test gaps. Only suggest tests clearly implied by the knowledge base but absent from execution logs."
+    
+    try:
+        missing_cases = llm_function(
+            context=context,
+            sysprompt=sysprompt or "You are a QA test coverage analyst skilled at identifying test gaps by comparing execution logs with requirements.",
+            prompt=prompt,
+            spl_prompt=special_prompt,
+        )
+        return missing_cases
+    except Exception as e:
+        print(f"Error identifying missing test cases: {str(e)}")
+        return "Unable to identify test gaps. Analysis service unavailable."
+
+
+def _safe_json_parse(payload: str) -> Dict[str, Any]:
+    """Safely parse JSON from LLM output, extracting the first JSON object if needed."""
+    if not payload:
+        return {}
+
+    try:
+        return json.loads(payload)
+    except Exception:
+        pass
+
+    # Try to locate a JSON object in the response
+    try:
+        start_idx = payload.find("{")
+        end_idx = payload.rfind("}")
+        if start_idx >= 0 and end_idx > start_idx:
+            return json.loads(payload[start_idx:end_idx + 1])
+    except Exception:
+        return {}
+
+    return {}
+
+
+def generate_llm_metrics(analyzer_summary: Dict[str, Any], llm_function, sysprompt: str = "") -> Dict[str, Any]:
+    """Generate structured LLM-derived metrics from automation log analysis."""
+
+    if analyzer_summary.get("error"):
+        return {
+            "status": "insufficient_data",
+            "reason": analyzer_summary.get("error"),
+        }
+
+    context = f"""
+Automation Test Run Analysis:
+==============================
+Total Tests: {analyzer_summary['total_tests']}
+Passed: {analyzer_summary['passed']} ({analyzer_summary['pass_rate']}%)
+Failed: {analyzer_summary['failed']}
+Skipped: {analyzer_summary['skipped']}
+Errors: {analyzer_summary['errors']}
+Success Rate: {analyzer_summary['success_rate']}%
+Total Execution Time: {analyzer_summary['execution_time']}s
+
+Common Error Types:
+{json.dumps(analyzer_summary['common_errors'], indent=2)}
+
+Top Failed Tests:
+{json.dumps(analyzer_summary['top_failed_tests'], indent=2)}
+
+Test Suites Count: {analyzer_summary['test_suites_count']}
+"""
+
+    prompt = """Derive structured QA metrics from the analysis. Return ONLY JSON with the following schema:
+{
+  "overall_health": "Excellent|Good|Fair|Poor",
+  "risk_level": "Low|Medium|High",
+  "stability_score": number (0-100),
+  "failure_trend": "Improving|Stable|Regressing|Unknown",
+  "primary_failure_modes": [string],
+  "root_cause_hypotheses": [string],
+  "priority_actions": [string],
+  "confidence": number (0-1)
+}
+Be concise, evidence-based, and avoid inventing details not implied by the analysis."""
+
+    try:
+        response = llm_function(
+            context=context,
+            sysprompt=sysprompt or "You are a QA analytics expert generating structured metrics from test results.",
+            prompt=prompt,
+            spl_prompt="Return JSON only. No markdown, no commentary.",
+        )
+        metrics = _safe_json_parse(response)
+        if metrics:
+            metrics["status"] = "ok"
+            return metrics
+        return {
+            "status": "parse_failed",
+            "raw": response,
+        }
+    except Exception as e:
+        print(f"Error generating LLM metrics: {str(e)}")
+        return {
+            "status": "failed",
+            "error": str(e),
+        }

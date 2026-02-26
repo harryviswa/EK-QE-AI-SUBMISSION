@@ -140,16 +140,19 @@ export const apiClient = {
   analyzeLogFolder: (folderPath, generateInsights = true) =>
     api.post('/logs/analyze-folder', { 
       folder_path: folderPath,
-      generate_insights: generateInsights
+      generate_insights: generateInsights,
+      generate_metrics: true,
+      generate_forecast: true,
+      identify_gaps: true
     }, {
-      timeout: 120000, // 2 minute timeout for analysis
+      timeout: 300000, // 5 minute timeout for analysis (LLM + ChromaDB queries)
     }),
   uploadLogFiles: (files) => {
     const formData = new FormData();
     files.forEach(file => formData.append('files', file));
-    return api.post('/logs/upload', formData, {
+    return api.post('/logs/upload?generate_metrics=true', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000, // 2 minute timeout for upload and analysis
+      timeout: 300000, // 5 minute timeout for upload and analysis (LLM + ChromaDB queries)
     });
   },
   getLogsSummary: () =>

@@ -102,6 +102,68 @@ body {
 .prose.prose-invert h2,
 .prose.prose-invert h3 {
   color: var(--chat-heading-color);
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.75em;
+}
+
+.prose.prose-invert h2 {
+  font-size: 1.1em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 0.3em;
+}
+
+.prose.prose-invert ul,
+.prose.prose-invert ol {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+  padding-left: 1.5em;
+}
+
+.prose.prose-invert li {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.prose.prose-invert strong {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.prose.prose-invert code {
+  background: var(--chat-code-bg);
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.prose.prose-invert pre {
+  background: var(--chat-code-bg);
+  padding: 1em;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.prose.prose-invert table {
+  border-collapse: collapse;
+  margin: 1em 0;
+}
+
+.prose.prose-invert th,
+.prose.prose-invert td {
+  border: 1px solid var(--chat-table-border);
+  padding: 0.5em 0.75em;
+}
+
+.prose.prose-invert th {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+}
+
+.prose.prose-invert h1,
+.prose.prose-invert h2,
+.prose.prose-invert h3 {
+  color: var(--chat-heading-color);
   margin-top: 0.5rem;
   margin-bottom: 0.5rem;
   line-height: 1.1;
